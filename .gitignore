@@ -1,0 +1,6 @@
+node_modules/
+dist/
+artifacts/
+data.json
+runtime/
+.DS_Store

@@ -1,0 +1,9 @@
+{
+  "id": "paper-concepts",
+  "name": "Paper Concepts",
+  "version": "0.1.0",
+  "minAppVersion": "1.11.4",
+  "description": "Turn academic PDFs into linked paper and concept notes with your local AI harness.",
+  "author": "Paper Concepts contributors",
+  "isDesktopOnly": true
+}

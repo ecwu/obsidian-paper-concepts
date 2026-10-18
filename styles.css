@@ -1,0 +1,27 @@
+.pc-view { max-width: 1040px; margin: 0 auto; padding: 32px; }
+.pc-header h1 { margin: 0 0 8px; font-size: var(--h2-size); }
+.pc-muted { color: var(--text-muted); }
+.pc-header p { margin: 0 0 20px; }
+.pc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pc-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 32px 24px; margin: 28px 0 16px; border: 1px dashed var(--background-modifier-border); border-radius: var(--radius-m); cursor: pointer; text-align: center; background: var(--background-secondary); }
+.pc-drop:hover, .pc-drop.is-dragging { border-color: var(--interactive-accent); background: var(--background-modifier-hover); }
+.pc-drop:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 3px; }
+.pc-status { color: var(--text-muted); font-size: var(--font-ui-small); overflow-wrap: anywhere; }
+.pc-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 32px 0 8px; }
+.pc-toolbar h2 { font-size: var(--h4-size); margin: 0; }
+.pc-job { padding: 20px 0; border-bottom: 1px solid var(--background-modifier-border); }
+.pc-job-heading { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }
+.pc-job h3 { font-size: var(--font-ui-medium); margin: 0; overflow-wrap: anywhere; }
+.pc-meta { font-size: var(--font-ui-small); margin: 8px 0 14px; }
+.pc-state { font-size: var(--font-ui-small); white-space: nowrap; color: var(--text-muted); }
+.pc-state-succeeded { color: var(--text-success); }
+.pc-state-failed, .pc-error { color: var(--text-error); }
+.pc-error, .pc-phase { overflow-wrap: anywhere; }
+.pc-job details { margin-top: 14px; font-size: var(--font-ui-small); }
+.pc-job summary { cursor: pointer; color: var(--text-muted); }
+.pc-log { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font-size: var(--font-ui-smaller); background: var(--background-secondary); padding: 12px; }
+.pc-empty { color: var(--text-muted); padding: 28px 0; }
+.pc-prompt-setting { display: block; }
+.pc-prompt-setting .setting-item-control { justify-content: stretch; margin-top: 10px; }
+.pc-prompt-setting textarea { width: 100%; min-height: 130px; resize: vertical; line-height: 1.6; }
+@media (max-width: 600px) { .pc-view { padding: 20px 16px; } .pc-job-heading { flex-direction: column; gap: 4px; } }

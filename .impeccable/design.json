@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-18T19:56:42Z",
+  "title": "Design System: Paper Concepts",
+  "extensions": {
+    "colorMeta": {
+      "interactive-accent": {
+        "role": "primary",
+        "displayName": "Theme Accent"
+      },
+      "background-primary": {
+        "role": "neutral",
+        "displayName": "Workspace Canvas"
+      },
+      "background-secondary": {
+        "role": "neutral",
+        "displayName": "Raised Surface"
+      },
+      "background-hover": {
+        "role": "neutral",
+        "displayName": "Interaction Surface"
+      },
+      "background-border": {
+        "role": "neutral",
+        "displayName": "Theme Divider"
+      },
+      "text-normal": {
+        "role": "neutral",
+        "displayName": "Normal Text"
+      },
+      "text-on-accent": {
+        "role": "neutral",
+        "displayName": "Accent Text"
+      },
+      "text-muted": {
+        "role": "neutral",
+        "displayName": "Muted Text"
+      },
+      "text-success": {
+        "role": "secondary",
+        "displayName": "Success Signal"
+      },
+      "text-error": {
+        "role": "tertiary",
+        "displayName": "Error Signal"
+      }
+    },
+    "typographyMeta": {
+      "view-title": {
+        "displayName": "View title",
+        "purpose": "The main Chinese heading for the plugin view."
+      },
+      "section-title": {
+        "displayName": "Section title",
+        "purpose": "The processing-record heading and other section labels."
+      },
+      "ui-medium": {
+        "displayName": "UI text",
+        "purpose": "Paper names and primary native-control text."
+      },
+      "ui-small": {
+        "displayName": "Meta and status",
+        "purpose": "Provider, parser, timestamp, and queue status text."
+      },
+      "ui-smaller": {
+        "displayName": "Log text",
+        "purpose": "Compact monospace output inside the expandable log block."
+      }
+    },
+    "breakpoints": [
+      {
+        "name": "mobile",
+        "value": "600px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Native Obsidian CTA for importing a PDF or saving settings.",
+      "html": "<button class=\"ds-button-primary\" type=\"button\">导入 PDF</button>",
+      "css": ".ds-button-primary { color: var(--text-on-accent); background: var(--interactive-accent); font: inherit; cursor: pointer; } .ds-button-primary:hover { background: var(--interactive-accent); } .ds-button-primary:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 3px; }"
+    },
+    {
+      "name": "Secondary action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Default native Obsidian button for configuration and task actions.",
+      "html": "<button class=\"ds-button-secondary\" type=\"button\">配置知识库</button>",
+      "css": ".ds-button-secondary { color: var(--text-normal); background: var(--background-modifier-hover); font: inherit; cursor: pointer; } .ds-button-secondary:hover { background: var(--background-modifier-hover); } .ds-button-secondary:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 3px; }"
+    },
+    {
+      "name": "PDF drop zone",
+      "kind": "custom",
+      "refersTo": "drop-zone",
+      "description": "Keyboard and pointer target for single or batch PDF import.",
+      "html": "<div class=\"ds-drop-zone\" role=\"button\" tabindex=\"0\" aria-label=\"拖入或选择 PDF 文件\"><strong>将 PDF 拖到这里</strong><span class=\"ds-muted\">支持批量导入。原始文件会保留在指定知识目录中。</span></div>",
+      "css": ".ds-drop-zone { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 32px 24px; margin: 28px 0 16px; border: 1px dashed var(--background-modifier-border); border-radius: var(--radius-m); cursor: pointer; text-align: center; background: var(--background-secondary); color: var(--text-normal); font: inherit; } .ds-drop-zone .ds-muted { color: var(--text-muted); } .ds-drop-zone:hover, .ds-drop-zone.is-dragging { border-color: var(--interactive-accent); background: var(--background-modifier-hover); } .ds-drop-zone:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 3px; }"
+    },
+    {
+      "name": "Task record",
+      "kind": "custom",
+      "refersTo": "task-row",
+      "description": "Flat processing record with semantic status and native task actions.",
+      "html": "<article class=\"ds-task-row\"><div class=\"ds-task-row-heading\"><h3 class=\"ds-task-row-title\">study.pdf</h3><span class=\"ds-status-success\">已完成</span></div><p class=\"ds-task-row-meta\">codex · 本地解析 · 10/18/2026, 8:40:12 PM</p><div class=\"ds-task-actions\"><button type=\"button\">打开论文</button><button type=\"button\">重新分析</button><button type=\"button\">改用 MinerU</button></div></article>",
+      "css": ".ds-task-row { padding: 20px 0; border-bottom: 1px solid var(--background-modifier-border); color: var(--text-normal); } .ds-task-row-heading { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; } .ds-task-row-title { font-size: var(--font-ui-medium); margin: 0; overflow-wrap: anywhere; } .ds-task-row-meta { color: var(--text-muted); font-size: var(--font-ui-small); margin: 8px 0 14px; overflow-wrap: anywhere; } .ds-task-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; } .ds-status-success { color: var(--text-success); font-size: var(--font-ui-small); white-space: nowrap; } @media (max-width: 600px) { .ds-task-row-heading { flex-direction: column; gap: 4px; } }"
+    },
+    {
+      "name": "Settings text field",
+      "kind": "input",
+      "description": "Native Obsidian setting field with plugin layout only for long prompt textareas.",
+      "html": "<label class=\"ds-settings-field\"><span>工作流程</span><textarea class=\"ds-settings-textarea\">使用论文证据整理知识库。</textarea></label>",
+      "css": ".ds-settings-field { display: block; color: var(--text-normal); font: inherit; } .ds-settings-textarea { width: 100%; min-height: 130px; resize: vertical; line-height: 1.6; font: inherit; color: var(--text-normal); background: var(--background-primary); } .ds-settings-textarea:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 3px; }"
+    },
+    {
+      "name": "Expandable log",
+      "kind": "custom",
+      "refersTo": "log-block",
+      "description": "Native disclosure for processing logs, kept compact until requested.",
+      "html": "<details class=\"ds-log\"><summary>查看日志</summary><pre>20:40:12  已完成</pre></details>",
+      "css": ".ds-log { margin-top: 14px; font-size: var(--font-ui-small); } .ds-log summary { cursor: pointer; color: var(--text-muted); } .ds-log pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font-size: var(--font-ui-smaller); background: var(--background-secondary); padding: 12px; color: var(--text-normal); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Native Obsidian Workbench",
+    "overview": "Paper Concepts behaves like a focused workbench inside Obsidian. It inherits the active desktop theme, uses native Obsidian controls, and keeps the content surface quiet so researchers can move from PDF import to processing records without learning a second visual language.\n\nThe visual hierarchy comes from spacing, type size, and semantic status text. Chinese labels are direct and functional; the reviewed surface is dark because the host theme is dark, but the system does not own a light or dark palette. Accent, surface, divider, and status colors remain theme variables.",
+    "keyCharacteristics": [
+      "Native Obsidian desktop chrome and controls.",
+      "Theme-bound surfaces with no custom brand palette.",
+      "Compact, scannable task records with Chinese functional copy.",
+      "Flat surfaces, a dashed drop target, and thin separators."
+    ],
+    "rules": [
+      {
+        "name": "The Host Theme Rule",
+        "body": "Do not introduce project hex colors; surface, text, accent, and state color comes from Obsidian variables.",
+        "section": "colors"
+      },
+      {
+        "name": "The Functional Copy Rule",
+        "body": "Keep labels direct, short, and task-oriented; Chinese UI text names the action or state without promotional language.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-by-Default Rule",
+        "body": "Convey depth with theme-owned tonal surfaces and separators; do not add project-level shadows or decorative effects.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use native Obsidian controls and the active theme variables.",
+      "Do preserve direct Chinese labels and short status or metadata lines.",
+      "Do keep task rows flat, separated by one-pixel theme borders, with semantic status colors.",
+      "Do keep the drop target keyboard-visible with the two-pixel accent outline and three-pixel offset."
+    ],
+    "donts": [
+      "Don't add a hex palette, gradients, shadows, custom fonts, or branded chrome.",
+      "Don't turn task records into floating cards; keep their transparent surface and bottom divider.",
+      "Don't replace host navigation or add a second app shell inside the plugin view.",
+      "Don't use decorative copy or status color without a state meaning."
+    ]
+  }
+}
