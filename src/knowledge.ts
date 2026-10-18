@@ -149,11 +149,11 @@ export class KnowledgeWriter {
     const paper: PlannedNote = { path: paperPath, before: existingPaper, title: result.paper.title, aliases: [], body: paperBody(job, result, concepts), fields: {
       title: result.paper.title, type: 'paper', 'pc-id': stableId(existingPaper), 'pc-source': job.hash,
       authors: result.paper.authors, year: result.paper.year, doi: result.paper.doi, arxiv: result.paper.arxiv,
-      tags: union(strings(existingPaper?.properties.tags), result.paper.tags), source: link(job.source, job.filename),
+      tags: union(strings(existingPaper?.properties.tags), result.paper.tags), source: link(job.parsed, job.filename),
       'pc-parser': job.settings.parser, 'pc-prompt': job.promptHash, ...timestamps(existingPaper, now)
     } };
     const planned = [...concepts, paper];
-    const links = new LinkResolver(vault, job.root, context.notes, planned, job.parsed ? posix.dirname(job.parsed) : undefined);
+    const links = new LinkResolver(vault, job.root, context.notes, planned, posix.dirname(job.parsed));
     links.pin(result.paper.title, paperPath);
     const changes: FileChange[] = [];
     for (const note of planned) {
@@ -190,9 +190,9 @@ export class KnowledgeWriter {
   }
 }
 
-/** The generated paper body plus the sections the plugin owns: concept links and the source PDF. */
+/** The generated paper body plus the sections the plugin owns: concept links and the parsed source text. */
 function paperBody(job: Job, result: GenerationResult, concepts: PlannedNote[]): string {
   let body = result.paper.body;
   if (concepts.length) body += '\n\n## 本次关联概念\n\n' + concepts.map(c => '- ' + link(c.path, c.title)).join('\n');
-  return body + `\n\n## 原始材料\n\n${link(job.source, job.filename)}`;
+  return body + `\n\n## 原始材料\n\n${link(job.parsed, job.filename)}`;
 }

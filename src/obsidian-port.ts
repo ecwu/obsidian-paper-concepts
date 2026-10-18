@@ -1,7 +1,6 @@
 import { App, TFile, TFolder, FileSystemAdapter, requestUrl } from 'obsidian';
 import { join } from 'node:path';
-import type { VaultPort } from './types';
-import type { HttpClient } from './parsers';
+import type { HttpClient, VaultPort } from './types';
 import { assertDiskBoundary } from './runtime';
 import { aborted, cancellation, relativePath } from './util';
 
@@ -37,6 +36,8 @@ export class ObsidianVaultPort implements VaultPort {
   async create(path: string, content: string): Promise<void> { await this.guard(path); await this.app.vault.create(path, content); }
   async createBinary(path: string, bytes: Uint8Array): Promise<void> { await this.guard(path); await this.app.vault.createBinary(path, bytes.slice().buffer as ArrayBuffer); }
   async process(path: string, fn: (current: string) => string): Promise<void> { await this.guard(path); await this.app.vault.process(this.file(path), fn); }
+  /** Moves a file to the trash the user selected in Obsidian, so it stays recoverable. Not part of VaultPort: only inbox handling uses it. */
+  async trash(path: string): Promise<void> { await this.guard(path); await this.app.fileManager.trashFile(this.file(path)); }
 }
 export const obsidianHttp: HttpClient = async (url, method, headers, body, signal) => {
   aborted(signal);

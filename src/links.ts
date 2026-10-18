@@ -10,7 +10,7 @@ export class LinkResolver {
   private names = new Map<string, Set<string>>();
   private paths: Set<string>;
   /** `pending` notes are about to be written, so they count as existing. `materials` is the folder relative image links point into. */
-  constructor(private vault: VaultPort, private root: string, existing: LinkTarget[], pending: LinkTarget[], private materials?: string) {
+  constructor(private vault: VaultPort, private root: string, existing: LinkTarget[], pending: LinkTarget[], private materials: string) {
     for (const note of [...existing, ...pending]) {
       for (const name of [note.title, ...note.aliases, note.path, note.path.replace(/\.md$/, ''), posix.basename(note.path, '.md')]) this.add(name, note.path);
     }
@@ -26,7 +26,7 @@ export class LinkResolver {
     if (matches && matches.size > 1) throw new Error(`链接名称不唯一：${target}`);
     if (matches?.size === 1) return [...matches][0]!;
     const candidates = [decoded, posix.normalize(posix.join(posix.dirname(from), decoded))];
-    if (this.materials) candidates.push(posix.normalize(posix.join(this.materials, decoded)));
+    candidates.push(posix.normalize(posix.join(this.materials, decoded)));
     for (const candidate of candidates.filter(c => within(c, this.root))) {
       for (const path of [candidate, candidate + '.md']) if (this.paths.has(path) || await this.vault.exists(path)) return path;
     }

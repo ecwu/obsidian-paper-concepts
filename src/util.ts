@@ -36,4 +36,15 @@ export async function delay(ms: number, signal: AbortSignal): Promise<void> {
     signal.addEventListener('abort', stop, { once: true });
   });
 }
+/** Runs tasks one after another. A failed task does not stop the tasks after it. */
+export class SerialQueue {
+  private tail: Promise<unknown> = Promise.resolve();
+  run<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(task);
+    this.tail = result.catch(() => {});
+    return result;
+  }
+  /** Resolves when all tasks queued so far have settled. */
+  async idle(): Promise<void> { await this.tail; }
+}
 export class ConflictError extends Error { constructor(message = '笔记在分析期间发生变化，任务需要重新生成') { super(message); this.name = 'ConflictError'; } }

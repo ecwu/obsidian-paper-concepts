@@ -8,7 +8,8 @@ The default analysis language is Chinese. You can change the language in the pro
 
 ## Features
 
-- **Paper notes.** Each PDF gives one Paper note with metadata, a structured analysis, and a link to the source PDF.
+- **Paper notes.** Each PDF gives one Paper note with metadata, a structured analysis, and a link to the parsed text.
+- **Only Markdown in your vault.** The plugin does not keep the PDF in the knowledge folder. It keeps the parsed Markdown and the images from MinerU.
 - **Concept notes that grow.** A Concept collects knowledge from many papers. The plugin finds existing Concepts by name and alias, and adds only new information.
 - **Plain Markdown.** Notes use YAML properties and Obsidian wiki links. You can edit all notes with usual Obsidian tools.
 - **Safe updates.** The plugin keeps your personal annotation sections and your custom properties. It does not delete paragraphs from earlier versions of a note.
@@ -18,14 +19,15 @@ The default analysis language is Chinese. You can change the language in the pro
 
 ## How it works
 
-1. You import a PDF. The plugin saves the PDF in the assets folder. Identical PDFs make only one job.
-2. The plugin parses the PDF to Markdown. It keeps the parsed text and uses it again for the same PDF.
-3. The plugin makes a snapshot of the Paper and Concept notes in your knowledge folder.
-4. The plugin copies the parsed text and the notes into a temporary folder. The harness reads only this folder, in read-only mode.
-5. The harness returns one JSON object. The plugin makes sure that the JSON agrees with a fixed schema.
-6. The plugin makes sure that all links in the result go to notes that exist.
-7. The plugin writes the notes. It records each file change before it writes, so it can continue after a crash.
-8. The plugin deletes the temporary folder.
+1. You import a PDF. The plugin keeps a temporary copy of the PDF in its `runtime/` folder, outside the knowledge folder. The same PDF with the same parser uses one job.
+2. The plugin parses the PDF to Markdown. It saves the Markdown and the images in the assets folder, and uses them again for the same PDF and parser.
+3. After a parse is successful, the plugin deletes the temporary PDF copy.
+4. The plugin makes a snapshot of the Paper and Concept notes in your knowledge folder.
+5. The plugin copies the parsed text and the notes into a temporary folder. The harness reads only this folder, in read-only mode.
+6. The harness returns one JSON object. The plugin makes sure that the JSON agrees with a fixed schema.
+7. The plugin makes sure that all links in the result go to notes that exist.
+8. The plugin writes the notes. It records each file change before it writes, so it can continue after a crash.
+9. The plugin deletes the temporary folder.
 
 This workflow comes from [cognitio](https://github.com/TerenceLiu98/cognitio): read the paper, look for existing knowledge, and then use that knowledge again.
 
@@ -88,13 +90,14 @@ The plugin keeps existing files. It creates only the folders that are missing.
 
 ```text
 <knowledge folder>/
-├── 000-Inbox/      PDFs that you put here go into the queue
+├── 000-Inbox/      PDFs that you put here go into the queue, then to the trash
 ├── 100-Papers/     one note for each paper
 ├── 200-Concepts/   one note for each concept
 └── Assets/
-    └── <PDF hash>/
-        ├── <original name>.pdf
-        └── parsed/<parser>-v1/   parsed Markdown, images, and metadata
+    └── <PDF hash>/parsed/<parser>-v1/
+        ├── full.md       parsed Markdown
+        ├── images/       images from MinerU
+        └── parsed.json   parse metadata
 ```
 
 ### MinerU (optional)
@@ -103,9 +106,17 @@ MinerU sends the PDF to the MinerU cloud service. Use it only if you agree to se
 
 1. Save your MinerU token in the Obsidian secret storage.
 2. In **MinerU Token**, select that secret. The plugin does not write the token to its settings file.
-3. In **PDF 解析器** (PDF parser), select MinerU. Or, use **改用 MinerU** (use MinerU) on one job.
+3. In **PDF 解析器** (PDF parser), select MinerU. Or, if a local parse fails, use **改用 MinerU** (use MinerU) on that job.
 
-The maximum PDF size for MinerU is 200 MB.
+The parser and the secret save immediately when you change them. Other fields save when you click the save button at the bottom of the page.
+
+To test the selected secret, click **测试 MinerU API** (test MinerU API). The test sends a synthetic one-page PDF and waits for the Markdown. It tests authentication, upload, parsing, and download. The test uses parsing quota. It does not read vault files, and it does not call a harness. The result shows below the controls. You can cancel the test. The test stops after three minutes.
+
+MinerU gives a ZIP file. The plugin keeps `full.md` and the images in the ZIP. It does not keep the JSON layout files or the copy of the PDF.
+
+New imports use the selected parser. An import of the same PDF with a different parser makes a new job. A retry keeps the original settings. If MinerU fails, the plugin does not start local parsing.
+
+The maximum PDF for MinerU is 200 MB and 200 pages. The plugin uses the [official v4 file API](https://mineru.net/apiManage/docs). `MINERU_API.md` shows how each API step agrees with the plugin.
 
 ## Usage
 
@@ -118,7 +129,7 @@ Use one of these methods:
 - Use the command **导入 PDF** from the command palette.
 - Copy PDFs into the inbox folder.
 
-The plugin examines the inbox folder every two seconds. A file goes into the queue when its size and time stamp stay the same for three examinations. If a file continues to change for five minutes, the plugin stops and shows a message. The file stays in the inbox folder.
+The plugin examines the inbox folder every two seconds. A file goes into the queue when its size and time stamp stay the same for three examinations. Then the plugin moves the inbox file to the trash that you set in Obsidian. If a file continues to change for five minutes, the plugin stops and shows a message. The file stays in the inbox folder. A file that is not a valid PDF also stays in the inbox folder.
 
 ### Manage jobs
 
@@ -129,14 +140,14 @@ The plugin view shows all jobs for the current knowledge folder.
 | **暂停队列** (pause queue) | The current job continues. The next jobs wait. |
 | **取消** (cancel) | Stops the current job, or removes a job from the queue. |
 | **重试原任务** (retry job) | Runs the job again with its original settings and prompts. |
-| **重新分析** (analyze again) | Makes a new job with your current settings and prompts. The plugin uses the saved parsed text again. |
-| **改用 MinerU** (use MinerU) | Makes a new job that uses MinerU to parse the PDF. |
+| **按当前设置重新分析** (analyze again with current settings) | Makes a new job with your current settings and prompts. If the parser is the same, the plugin uses the saved parsed text again. |
+| **改用 MinerU** (use MinerU) | Shows on a failed local job. Makes a new job that uses MinerU to parse the PDF. |
 | **打开论文** (open paper) | Opens the Paper note. |
-| **查看日志** (show log) | Shows the log of the job. |
+| **查看日志** (show log) | Shows the steps of the job: the parse result, the existing knowledge, each file that the model reads or searches, and the planned writes. Each line shows one time only. |
 
 ### Note properties
 
-A Paper note has these properties: `title`, `type: paper`, `pc-id`, `pc-source` (the PDF hash), `authors`, `year`, `doi`, `arxiv`, `tags`, `source`, `pc-parser`, `pc-prompt`, `created`, and `updated`.
+A Paper note has these properties: `title`, `type: paper`, `pc-id`, `pc-source` (the PDF hash), `authors`, `year`, `doi`, `arxiv`, `tags`, `source` (a link to the parsed text), `pc-parser`, `pc-prompt`, `created`, and `updated`.
 
 A Concept note has these properties: `title`, `type: concept`, `pc-id`, `aliases`, `tags`, `sources`, `created`, and `updated`.
 
@@ -146,7 +157,7 @@ The plugin finds notes by `type` and `pc-id`. Do not copy a note and keep the sa
 
 You can edit four templates in the settings: workflow, Paper format, Concept format, and writing rules. The JSON output contract is separate, and you cannot change it.
 
-A prompt change has an effect only on new jobs. To compare the result, use **重新分析** (analyze again).
+A prompt change has an effect only on new jobs. To compare the result, use **按当前设置重新分析** (analyze again with current settings).
 
 ## Data and safety
 
@@ -156,10 +167,12 @@ A prompt change has an effect only on new jobs. To compare the result, use **重
 - Local parsing does not use the network. MinerU sends the PDF to the MinerU service.
 - The plugin removes tokens and passwords from logs.
 - Each job keeps records in `.obsidian/plugins/paper-concepts/runtime/jobs/<job id>/`: the job record, the harness result, and the file change journal.
+- The temporary PDF copy is in `.obsidian/plugins/paper-concepts/runtime/sources/`. The plugin deletes it after a successful parse, if no other job for the same PDF needs it.
 
 ## Errors and recovery
 
-- **Scanned PDF.** Local parsing gives an error if the PDF has too little text. The PDF stays in the assets folder. The plugin does not change to MinerU automatically. Use **改用 MinerU** (use MinerU).
+- **Scanned PDF.** Local parsing gives an error if the PDF has too little text. The plugin keeps the temporary PDF copy. The plugin does not change to MinerU automatically. Use **改用 MinerU** (use MinerU).
+- **A new parser after a successful parse.** The plugin deleted the PDF copy after the first successful parse. If you select a different parser and analyze the paper again, the job stops and tells you to import the PDF again.
 - **Notes change during analysis.** If a note in the knowledge folder changes during a job, the plugin generates the result one more time. If the notes change again, the job stops. The plugin keeps the existing files and the generated result.
 - **Interrupted writes.** The plugin uses the file change journal to continue. If you edited a file after the plugin wrote it, the plugin stops. It does not overwrite your edit.
 - **Obsidian closes.** The plugin stops the harness process. At the next start, the job continues from the last saved step.
@@ -196,13 +209,14 @@ The unit tests use generated PDFs, temporary folders, simulated harness CLIs, an
 | `src/result.ts` | JSON schema and validation for the harness result |
 | `src/knowledge.ts` | Knowledge snapshot, Concept match, note merge, and journal write |
 | `src/links.ts` | Link resolution and link rewrite |
-| `src/parsers.ts` | Local PDF.js parser and MinerU parser |
+| `src/parsers.ts` | Local PDF.js parser |
+| `src/mineru.ts` | MinerU v4 API client, result ZIP extraction, and the API test |
 | `src/parse-cache.ts` | Storage of parsed text for the next jobs |
 | `src/settings.ts` | Settings, validation, and the folder layout |
 | `src/scoped-vault.ts` | Vault access that stays in the knowledge folder |
 | `src/jobs.ts` | Rules for job phases |
 | `src/inbox.ts` | Detection of stable files in the inbox |
-| `src/runtime.ts` | Job records on disk |
+| `src/runtime.ts` | Job records and the temporary PDF copies on disk |
 | `src/ui.ts` | Plugin view and settings tab |
 
 Obsidian file operations go through the `VaultPort` interface in `src/types.ts`. Thus, the tests can use an in-memory vault.

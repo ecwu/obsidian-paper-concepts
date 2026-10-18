@@ -3,11 +3,12 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join, delimiter } from 'node:path';
 import { createInterface } from 'node:readline';
 import { stringify } from 'yaml';
-import type { GenerationResult, HarnessAdapter, HarnessEvent, HarnessRequest, Provider } from './types';
+import type { GenerationResult, HarnessAdapter, HarnessEvent, HarnessRequest, Provider, ToolActivity } from './types';
 import { OUTPUT_SCHEMA, validateResult } from './result';
 import { aborted, cancellation, redact } from './util';
+import { lineRange, shellActivity, taskFile } from './activity';
 
-export interface DecodedEvent { event?: HarnessEvent; answer?: unknown; text?: string; fatal?: string }
+export interface DecodedEvent { events?: HarnessEvent[]; answer?: unknown; text?: string; fatal?: string }
 type JsonEvent = Record<string, any>;
 
 /** Everything that differs between harness CLIs. The process handling in `CliHarness` is shared. */
@@ -23,7 +24,15 @@ interface HarnessSpec {
   prepare?(cwd: string): Promise<void>;
 }
 
-const TOOL_EVENT: DecodedEvent = { event: { kind: 'tool', text: '读取论文或检索知识' } };
+const tool = (activity: ToolActivity | undefined): DecodedEvent => activity ? { events: [{ kind: 'tool', activity }] } : {};
+/** Read, Grep, and Glob calls of Claude Code and OpenCode share their input shapes, apart from the path field name. */
+function fileTool(name: string, input: JsonEvent): ToolActivity | undefined {
+  const path = String(input.file_path ?? input.filePath ?? input.path ?? '');
+  if (/^read$/i.test(name)) return { action: 'read', target: taskFile(path), detail: lineRange(input.offset, input.limit) };
+  if (/^grep$/i.test(name) && typeof input.pattern === 'string') return { action: 'search', target: path ? taskFile(path) : '', detail: input.pattern };
+  if (/^glob$/i.test(name)) return { action: 'list', target: '' };
+  return undefined;
+}
 const modelArgs = (flag: string, request: HarnessRequest) => request.model ? [flag, request.model] : [];
 
 /** Read-only OpenCode agent. Both config locations OpenCode loads get the same definition. */
@@ -46,7 +55,8 @@ export const HARNESSES: Record<Provider, HarnessSpec> = {
     decode: v => {
       if (v.type === 'turn.failed' || v.type === 'error') return { fatal: v.error?.message ?? v.message ?? 'Codex 执行失败' };
       if (v.type === 'item.completed' && v.item?.type === 'agent_message') return { text: v.item.text };
-      if (v.type?.startsWith('item.') && v.item?.type === 'command_execution') return TOOL_EVENT;
+      // Each command arrives as item.started and item.completed; report it once, at the start.
+      if (v.type === 'item.started' && v.item?.type === 'command_execution') return tool(shellActivity(String(v.item.command ?? '')));
       return {};
     }
   },
@@ -63,8 +73,11 @@ export const HARNESSES: Record<Provider, HarnessSpec> = {
         return v.structured_output ? { answer: v.structured_output } : { text: v.result };
       }
       if (v.type === 'assistant') {
-        const text = (v.message?.content ?? []).filter((c: JsonEvent) => c.type === 'text').map((c: JsonEvent) => c.text).join('');
-        return text ? { text } : TOOL_EVENT;
+        const content: JsonEvent[] = v.message?.content ?? [];
+        const events = content.filter(c => c.type === 'tool_use').map(c => fileTool(String(c.name), c.input ?? {}))
+          .filter((a): a is ToolActivity => !!a).map(activity => ({ kind: 'tool' as const, activity }));
+        const text = content.filter(c => c.type === 'text').map(c => c.text).join('');
+        return { events, ...(text ? { text } : {}) };
       }
       return {};
     }
@@ -77,7 +90,7 @@ export const HARNESSES: Record<Provider, HarnessSpec> = {
       if (v.type === 'error') return { fatal: v.error?.data?.message ?? v.error?.message ?? v.message ?? 'OpenCode 执行失败' };
       const part = v.part ?? v.properties?.part;
       if (v.type === 'text' || v.type === 'message.part.updated' && part?.type === 'text') return { text: part?.text ?? v.text };
-      if (v.type === 'tool_use' || part?.type === 'tool') return TOOL_EVENT;
+      if (v.type === 'tool_use' || part?.type === 'tool') return tool(fileTool(String(part?.tool ?? ''), part?.state?.input ?? {}));
       return {};
     },
     prepare: async cwd => {
@@ -149,7 +162,7 @@ export class CliHarness implements HarnessAdapter {
         try { value = JSON.parse(line); } catch { return; /* Non-JSON startup output is not a knowledge artifact. */ }
         if (!value || typeof value !== 'object') return;
         const decoded = this.spec.decode(value as JsonEvent);
-        if (decoded.event) onEvent(decoded.event);
+        for (const event of decoded.events ?? []) onEvent(event);
         if (decoded.answer) finalAnswer = decoded.answer;
         if (decoded.text) text = decoded.text;
         if (decoded.fatal) fatal = redact(decoded.fatal);

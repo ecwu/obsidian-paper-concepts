@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { join, posix } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ContextSnapshot, HarnessAdapter, Job, ParserKind, PdfParser, RuntimeStore, Settings, VaultPort, WriteJournal } from './types';
-import { hash, aborted, ConflictError, redact, safeFilename } from './util';
+import { hash, aborted, ConflictError, redact, SerialQueue } from './util';
 import { layoutOf, validateSettings, type Layout } from './settings';
 import { makePrompt } from './prompts';
-import { scopedVault } from './scoped-vault';
 import { ParseCache } from './parse-cache';
 import { KnowledgeRepository, KnowledgeWriter } from './knowledge';
 import { canRetry, isPending, wasInFlight } from './jobs';
+import { activityDescriber, describeContext, describePlan, onceEach } from './activity';
 
 export interface EngineDependencies {
   vault: VaultPort; store: RuntimeStore; settings: () => Settings;
@@ -22,13 +22,16 @@ export class TaskEngine {
   paused = false;
   private stopped = false;
   private active?: { job: Job; controller: AbortController; promise: Promise<void> };
-  private importTail: Promise<unknown> = Promise.resolve();
+  /** Serializes job creation so concurrent imports of one PDF cannot both pass the duplicate check. */
+  private imports = new SerialQueue();
   private writer: KnowledgeWriter;
   constructor(readonly deps: EngineDependencies) { this.writer = new KnowledgeWriter(deps.vault, deps.store); }
   get busy(): boolean { return !!this.active; }
   get activeJob(): Job | undefined { return this.active?.job; }
   async start(): Promise<void> {
     this.jobs = await this.deps.store.loadJobs();
+    // Records from 0.1.0 have no `parsed` path; it is a pure function of the job's settings and PDF hash.
+    for (const job of this.jobs) job.parsed ??= layoutOf(job.settings).parsedMarkdown(job.hash, job.settings.parser);
     for (const job of this.jobs.filter(wasInFlight)) {
       job.phase = 'interrupted'; this.log(job, '上次任务中断，将复用已保存的阶段'); await this.persist(job);
     }
@@ -38,9 +41,9 @@ export class TaskEngine {
   /** Notifies listeners and starts the next job if the queue can run, e.g. after settings change. */
   refresh(): void { this.changed(); this.kick(); }
   async stop(): Promise<void> { this.stopped = true; this.active?.controller.abort(); await this.active?.promise; }
-  async importPdf(bytes: Uint8Array, filename: string, force = false, parser?: ParserKind): Promise<Job> {
-    const action = this.importTail.then(() => this.importOne(bytes, filename, force, parser));
-    this.importTail = action.catch(() => {}); return action;
+  /** Imports a PDF with the current settings. The same PDF with the same parser returns the existing job. */
+  importPdf(bytes: Uint8Array, filename: string): Promise<Job> {
+    return this.imports.run(() => this.importOne(bytes, filename));
   }
   async importBatch(files: { name: string; read: () => Promise<Uint8Array> }[]): Promise<{ jobs: Job[]; errors: string[] }> {
     const jobs: Job[] = [], errors: string[] = [];
@@ -50,24 +53,25 @@ export class TaskEngine {
     }
     return { jobs, errors };
   }
-  private async importOne(bytes: Uint8Array, filename: string, force: boolean, parser?: ParserKind): Promise<Job> {
+  private async importOne(bytes: Uint8Array, filename: string): Promise<Job> {
     if (this.stopped) throw new Error('插件正在停止，请重新打开后导入');
-    const settings = structuredClone(this.deps.settings()); if (parser) settings.parser = parser;
+    const settings = structuredClone(this.deps.settings());
     validateSettings(settings);
     if (!/\.pdf$/i.test(filename) || !new TextDecoder().decode(bytes.slice(0, 1024)).includes('%PDF-')) throw new Error('请选择有效的 PDF 文件');
     const sourceHash = hash(bytes);
-    const duplicate = this.jobs.find(j => j.root === settings.root && j.hash === sourceHash);
-    if (duplicate && !force) return duplicate;
-    const layout = layoutOf(settings), vault = scopedVault(this.deps.vault, settings.root);
-    const source = layout.source(sourceHash, safeFilename(filename.replace(/\.pdf$/i, '')) + '.pdf');
+    const duplicate = this.jobs.find(j => j.root === settings.root && j.hash === sourceHash && j.settings.parser === settings.parser);
+    if (duplicate) return duplicate;
+    await this.deps.store.saveSource(sourceHash, bytes);
+    return this.createJob(settings, filename, sourceHash, 'PDF 已接收，等待处理');
+  }
+  /** Queues a job. Its PDF must be in the runtime store, or its parse must already exist. */
+  private async createJob(settings: Settings, filename: string, sourceHash: string, message: string): Promise<Job> {
+    const layout = layoutOf(settings);
     await this.createFolders(layout);
-    await vault.mkdir(posix.dirname(source));
-    if (!await vault.exists(source)) await vault.createBinary(source, bytes);
-    else if (hash(await vault.readBinary(source)) !== sourceHash) throw new Error('保存位置存在不同的 PDF，未覆盖该文件');
     const now = new Date().toISOString();
-    const job: Job = { id: randomUUID(), root: settings.root, settings, filename, hash: sourceHash, source, phase: 'queued',
-      created: now, updated: now, promptHash: hash(makePrompt(settings.prompts)), conflictRetries: 0, logs: [] };
-    this.log(job, 'PDF 已保存，等待处理'); this.jobs.unshift(job); await this.persist(job); this.kick(); return job;
+    const job: Job = { id: randomUUID(), root: settings.root, settings, filename, hash: sourceHash, parsed: layout.parsedMarkdown(sourceHash, settings.parser),
+      phase: 'queued', created: now, updated: now, promptHash: hash(makePrompt(settings.prompts)), conflictRetries: 0, logs: [] };
+    this.log(job, message); this.jobs.unshift(job); await this.persist(job); this.kick(); return job;
   }
   async initializeFolders(): Promise<void> {
     const settings = this.deps.settings();
@@ -88,10 +92,13 @@ export class TaskEngine {
     if (job.root !== this.deps.settings().root) throw new Error('请先选择此任务所属的知识目录');
     job.error = undefined; job.phase = 'queued'; job.conflictRetries = 0; await this.persist(job); this.kick();
   }
+  /** Queues a new job for the same PDF with the current settings, or with `parser` if given. */
   async reanalyze(id: string, parser?: ParserKind): Promise<Job> {
     const job = this.jobs.find(j => j.id === id); if (!job) throw new Error('任务不存在');
-    if (job.root !== this.deps.settings().root) throw new Error('请先选择此任务所属的知识目录');
-    return this.importPdf(await this.deps.vault.readBinary(job.source), job.filename, true, parser);
+    const settings = structuredClone(this.deps.settings()); if (parser) settings.parser = parser;
+    if (job.root !== settings.root) throw new Error('请先选择此任务所属的知识目录');
+    validateSettings(settings);
+    return this.imports.run(() => this.createJob(settings, job.filename, job.hash, '按当前设置重新分析'));
   }
   private kick(): void {
     if (this.active || this.paused || this.stopped) return;
@@ -149,29 +156,43 @@ export class TaskEngine {
   private async generate(job: Job, signal: AbortSignal): Promise<WriteJournal> {
     const layout = layoutOf(job.settings);
     await this.phase(job, 'parsing', job.settings.parser === 'local' ? '在本机提取 PDF 文字' : '使用 MinerU 解析 PDF');
-    const parse = async (bytes: Uint8Array) => (await this.deps.parser(job.settings.parser, job.settings)).parse(bytes, job.filename, signal);
-    job.parsed = await new ParseCache(this.deps.vault, layout).load(job.source, job.hash, job.settings.parser, parse, signal, text => this.log(job, text));
-    await this.persist(job);
+    const log = (text: string) => this.log(job, text);
+    const readSource = async () => {
+      const bytes = await this.deps.store.loadSource(job.hash);
+      if (!bytes) throw new Error('原始 PDF 已在解析成功后删除，且没有此解析器的解析正文。请重新导入该 PDF');
+      return bytes;
+    };
+    const parse = async (bytes: Uint8Array) => (await this.deps.parser(job.settings.parser, job.settings)).parse(bytes, job.filename, signal, log);
+    await new ParseCache(this.deps.vault, layout).ensure(job.hash, job.settings.parser, readSource, parse, signal, log);
+    await this.releaseSource(job);
     aborted(signal);
     const repository = new KnowledgeRepository(this.deps.vault, layout);
     await this.phase(job, 'context', '准备论文与已有概念');
     const context = await repository.snapshot();
+    this.log(job, describeContext(context));
     await this.phase(job, 'generating', `使用 ${job.settings.provider} 分析论文`);
     const prompt = makePrompt(job.settings.prompts);
+    const describe = activityDescriber(context), report = onceEach(text => this.log(job, text));
     const model = job.settings.models[job.settings.provider], timeoutMs = job.settings.timeoutMinutes * 60_000;
-    const result = await this.inWorkspace(job, job.parsed, context, prompt,
-      cwd => this.deps.harness(job).run({ cwd, prompt, model, timeoutMs }, signal, e => this.log(job, e.text)));
+    const result = await this.inWorkspace(job, context, prompt,
+      cwd => this.deps.harness(job).run({ cwd, prompt, model, timeoutMs }, signal, e => report(e.kind === 'tool' ? describe(e.activity) : e.text)));
     await this.deps.store.saveResult(job.id, result); aborted(signal);
     await this.phase(job, 'validating', '检查结果、链接和知识版本');
     await repository.assertUnchanged(context);
-    return this.writer.prepare(job, result, context);
+    const journal = await this.writer.prepare(job, result, context);
+    this.log(job, describePlan(journal));
+    return journal;
+  }
+  /** Deletes the stored PDF once no other job of the same PDF may still need to parse it. */
+  private async releaseSource(job: Job): Promise<void> {
+    if (this.jobs.every(other => other === job || other.hash !== job.hash || other.phase === 'succeeded')) await this.deps.store.discardSource(job.hash);
   }
   /** Gives the harness a private temporary directory with the paper and knowledge copies; it is removed when `run` settles. */
-  private async inWorkspace<T>(job: Job, parsed: string, context: ContextSnapshot, prompt: string, run: (cwd: string) => Promise<T>): Promise<T> {
+  private async inWorkspace<T>(job: Job, context: ContextSnapshot, prompt: string, run: (cwd: string) => Promise<T>): Promise<T> {
     const directory = await mkdtemp(join(tmpdir(), 'paper-concepts-'));
     try {
       await mkdir(join(directory, 'knowledge'), { mode: 0o700 });
-      await writeFile(join(directory, 'source.md'), await this.deps.vault.read(parsed), { mode: 0o600 });
+      await writeFile(join(directory, 'source.md'), await this.deps.vault.read(job.parsed), { mode: 0o600 });
       const catalog = [];
       for (const note of context.notes) {
         const path = 'knowledge/' + hash(note.id) + '.md';

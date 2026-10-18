@@ -64,3 +64,23 @@ The screenshot is `.impeccable/review/desktop.png`. A separate final review exam
 - Drag-and-drop and the file selector use the same import function. The interface tests used the file selector and the inbox folder. They did not use a drag from Finder.
 - The body merge keeps old material by section and by paragraph. If the model changes a section name, the old material can stay as an extra section. You can edit it later as usual Markdown.
 - Cancel stops the local wait and the save steps. A task that MinerU received can continue on the MinerU service.
+
+## MinerU changes and Markdown-only storage, 2026-10-18
+
+After these changes, the automatic tests pass: 7 test files, 83 tests. `pnpm check` and `pnpm build` also pass.
+
+The new tests cover these areas:
+
+- **Settings.** The parser and the secret save immediately. Settings writes occur one after another.
+- **Parsers.** Each parser has its own saved parse. An import with a different parser makes a new job.
+- **MinerU API.** The official v4 methods, the request fields, the upload bytes, and the progress messages. Tokens that are not valid or expired, the daily limit, cancellation, and the three-minute test limit.
+- **Settings controls.** Simulated native controls for the parser, the secret, the test result, and cancellation when the settings close.
+- **PDF storage.** The PDF does not go into the vault. The plugin keeps a temporary copy until a parse is successful. It keeps the copy while another job for the same PDF needs it. If a new parser needs the PDF after the plugin deleted it, the job stops and asks for the PDF again.
+
+These tests were not done:
+
+- The tests did not operate the live Obsidian controls.
+- The tests did not call MinerU with a real token.
+- The tests did not move a real inbox file to the Obsidian trash. Simulated vaults do not have a trash.
+
+`MINERU_API.md` shows how each API step agrees with the plugin.

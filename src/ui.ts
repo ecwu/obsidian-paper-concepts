@@ -1,9 +1,12 @@
-import { App, ItemView, PluginSettingTab, Setting, WorkspaceLeaf, SecretComponent, Notice, type TextAreaComponent } from 'obsidian';
+import { App, ItemView, PluginSettingTab, Setting, WorkspaceLeaf, SecretComponent, Notice, type ButtonComponent, type TextAreaComponent } from 'obsidian';
 import type PaperConceptsPlugin from './main';
-import { PARSERS, PROVIDERS, type Job, type ParserKind, type Phase, type Prompts, type Provider } from './types';
+import { PARSERS, PROVIDERS, type Job, type ParserKind, type Phase, type Prompts, type Provider, type Settings } from './types';
 import { DEFAULT_PROMPTS } from './prompts';
 import { CliHarness, HARNESSES } from './harness';
 import { canRetry, isFinished, isPending } from './jobs';
+import { testMineruApi } from './mineru';
+import { obsidianHttp } from './obsidian-port';
+import { redact } from './util';
 
 export const VIEW_TYPE = 'paper-concepts';
 const LABELS: Record<Phase, string> = {
@@ -80,9 +83,10 @@ export class PaperView extends ItemView {
     if (active || isPending(job)) button('取消', () => this.plugin.engine.cancel(job.id));
     if (!active && canRetry(job)) button('重试原任务', () => this.plugin.engine.retry(job.id));
     if (!active && isFinished(job)) {
-      button('重新分析', () => this.plugin.engine.reanalyze(job.id));
-      if (job.settings.parser === 'local') button('改用 MinerU', () => this.plugin.engine.reanalyze(job.id, 'mineru'));
+      button('按当前设置重新分析', () => this.plugin.engine.reanalyze(job.id));
     }
+    // A failed local parse keeps the PDF in the runtime store, so MinerU can parse it again.
+    if (!active && canRetry(job) && job.settings.parser === 'local') button('改用 MinerU', () => this.plugin.engine.reanalyze(job.id, 'mineru'));
     const logs = row.createEl('details'); logs.open = this.selected === job.id;
     logs.createEl('summary', { text: '查看日志' });
     logs.addEventListener('toggle', () => { if (logs.open) this.selected = job.id; else if (this.selected === job.id) this.selected = undefined; });
@@ -91,8 +95,53 @@ export class PaperView extends ItemView {
 }
 
 export class PaperSettingsTab extends PluginSettingTab {
+  private testController?: AbortController;
   constructor(app: App, private plugin: PaperConceptsPlugin) { super(app, plugin); }
+  hide(): void { this.testController?.abort(); }
+  /** The parser and secret save on change, so a new import uses them without the save button. */
+  private renderParsing(el: HTMLElement, draft: Settings): void {
+    const status = el.createEl('p', { cls: 'pc-muted', attr: { role: 'status', 'aria-live': 'polite' } });
+    let revision = 0;
+    const save = () => {
+      const current = ++revision;
+      status.setText('正在保存解析设置…');
+      this.plugin.saveParsingSettings({ parser: draft.parser, mineruSecret: draft.mineruSecret }).then(
+        () => { if (current === revision) status.setText(`已保存：${PARSER_LABELS[this.plugin.settings.parser]}。新导入或按当前设置重新分析时生效。`); },
+        error => { if (current === revision) status.setText(`解析设置保存失败：${redact(String(error.message ?? error))}`); });
+    };
+    new Setting(el).setName('PDF 解析器').setDesc('修改后立即保存。已有任务保留原解析器；选择 MinerU 会上传新任务的 PDF 到其云端服务。').addDropdown(dropdown => {
+      for (const parser of PARSERS) dropdown.addOption(parser, PARSER_LABELS[parser]);
+      dropdown.setValue(draft.parser).onChange(v => { draft.parser = v as ParserKind; save(); });
+    });
+    new Setting(el).setName('MinerU Token').setDesc('选择 Obsidian 凭据存储中的密钥。选择后立即保存，Token 不会写入插件配置。').addComponent(container =>
+      new SecretComponent(this.app, container).setValue(draft.mineruSecret).onChange(v => { draft.mineruSecret = v ?? ''; save(); }));
+  }
+  /** Tests the selected secret against the real API with a synthetic PDF. Closing the settings cancels the test. */
+  private renderMineruTest(el: HTMLElement, draft: Settings): void {
+    const result = el.createEl('p', { cls: 'pc-muted', attr: { role: 'status', 'aria-live': 'polite' } });
+    const setting = new Setting(el).setName('MinerU API 测试')
+      .setDesc('上传内置的一页测试 PDF，检查认证、上传、解析和下载，会使用解析额度。不上传仓库文件，不调用 AI，不保存笔记。');
+    let start!: ButtonComponent, cancel!: ButtonComponent;
+    const run = async () => {
+      if (this.testController) return;
+      const controller = new AbortController(); this.testController = controller;
+      start.setDisabled(true); cancel.setDisabled(false);
+      result.setText('正在准备 MinerU API 测试…');
+      try {
+        const token = this.app.secretStorage.getSecret(draft.mineruSecret) ?? '';
+        result.setText(await testMineruApi(obsidianHttp, token, controller.signal, text => result.setText(text)));
+      } catch (error) {
+        result.setText(controller.signal.aborted ? '测试已取消。已上传的云端任务可能继续运行。' : `测试失败：${redact((error as Error).message)}`);
+      } finally {
+        if (this.testController === controller) this.testController = undefined;
+        start.setDisabled(false); cancel.setDisabled(true);
+      }
+    };
+    setting.addButton(button => { start = button; button.setButtonText('测试 MinerU API').onClick(run); });
+    setting.addButton(button => { cancel = button; button.setButtonText('取消测试').setDisabled(true).onClick(() => this.testController?.abort()); });
+  }
   display(): void {
+    this.testController?.abort();
     const el = this.containerEl; el.empty(); el.addClass('pc-settings');
     const draft = structuredClone(this.plugin.settings);
     el.createEl('h2', { text: 'Paper Concepts' });
@@ -101,12 +150,8 @@ export class PaperSettingsTab extends PluginSettingTab {
       new Setting(el).setName(name).setDesc(description).addText(input => input.setValue(value).onChange(update));
     text('知识目录', '使用仓库内相对路径，例如 100-Research/190-Paper Library。已有文件会保留。', draft.root, v => { draft.root = v.trim(); });
     for (const [key, label] of FOLDER_FIELDS) text(label, '相对于知识目录。', draft[key], v => { draft[key] = v.trim(); });
-    new Setting(el).setName('PDF 解析器').setDesc('本地提取只读取 PDF 文字；选择 MinerU 会上传 PDF 到其云端服务。').addDropdown(dropdown => {
-      for (const parser of PARSERS) dropdown.addOption(parser, PARSER_LABELS[parser]);
-      dropdown.setValue(draft.parser).onChange(v => { draft.parser = v as ParserKind; });
-    });
-    new Setting(el).setName('MinerU Token').setDesc('选择 Obsidian 凭据存储中的密钥。密钥不会写入插件配置。').addComponent(container =>
-      new SecretComponent(this.app, container).setValue(draft.mineruSecret).onChange(v => { draft.mineruSecret = v ?? ''; }));
+    this.renderParsing(el, draft);
+    this.renderMineruTest(el, draft);
     new Setting(el).setName('AI Harness').addDropdown(dropdown => {
       for (const provider of PROVIDERS) dropdown.addOption(provider, HARNESSES[provider].label);
       dropdown.setValue(draft.provider).onChange(v => { draft.provider = v as Provider; });

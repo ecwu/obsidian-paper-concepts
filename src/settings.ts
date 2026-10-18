@@ -1,6 +1,6 @@
-import { PARSERS, PROVIDERS, type Settings } from './types';
+import { PARSERS, PROVIDERS, type ParserKind, type Settings } from './types';
+import { relativePath, SerialQueue, within } from './util';
 import { DEFAULT_PROMPTS } from './prompts';
-import { relativePath, within } from './util';
 
 export const DEFAULT_SETTINGS: Settings = {
   root: '', inbox: '000-Inbox', papers: '100-Papers', concepts: '200-Concepts', assets: 'Assets',
@@ -24,13 +24,31 @@ export function validateSettings(s: Settings): void {
   if (!s.executables[s.provider].trim()) throw new Error('请指定 Harness 程序路径');
 }
 
+/** Serializes writes so rapid changes cannot restore an older selection. */
+export class SettingsPersistence {
+  private queue = new SerialQueue();
+  constructor(private read: () => Settings, private write: (next: Settings) => Promise<void>, private apply: (next: Settings) => void) {}
+  update(change: (current: Settings) => Settings): Promise<void> {
+    return this.queue.run(async () => {
+      const next = structuredClone(change(this.read()));
+      await this.write(next); this.apply(next);
+    });
+  }
+  flush(): Promise<void> { return this.queue.idle(); }
+}
+export function parsingSettings(current: Settings, preferences: Pick<Settings, 'parser' | 'mineruSecret'>): Settings {
+  if (!PARSERS.includes(preferences.parser)) throw new Error('请选择支持的 PDF 解析器');
+  return { ...current, parser: preferences.parser, mineruSecret: preferences.mineruSecret.trim() };
+}
+
 /** The vault paths a knowledge folder occupies. The only place folder paths are joined. */
 export interface Layout {
   root: string; inbox: string; papers: string; concepts: string; assets: string;
   /** Folders whose notes are materials, not knowledge. */
   excluded: string[];
-  source(hash: string, filename: string): string;
-  parsed(hash: string, key: string): string;
+  /** Folder of one parse of one PDF: the Markdown, its images, and metadata. */
+  parsedDir(hash: string, parser: ParserKind): string;
+  parsedMarkdown(hash: string, parser: ParserKind): string;
 }
 export function layoutOf(s: Pick<Settings, 'root' | 'inbox' | 'papers' | 'concepts' | 'assets'>): Layout {
   const at = (folder: string) => `${s.root}/${folder}`;
@@ -38,7 +56,7 @@ export function layoutOf(s: Pick<Settings, 'root' | 'inbox' | 'papers' | 'concep
   return {
     root: s.root, inbox, papers: at(s.papers), concepts: at(s.concepts), assets,
     excluded: [assets, inbox],
-    source: (hash, filename) => `${assets}/${hash}/${filename}`,
-    parsed: (hash, key) => `${assets}/${hash}/parsed/${key}`
+    parsedDir: (hash, parser) => `${assets}/${hash}/parsed/${parser}-v1`,
+    parsedMarkdown: (hash, parser) => `${assets}/${hash}/parsed/${parser}-v1/full.md`
   };
 }

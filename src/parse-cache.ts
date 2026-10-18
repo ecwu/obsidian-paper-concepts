@@ -1,30 +1,35 @@
 import { posix } from 'node:path';
-import type { ParsedPaper, VaultPort } from './types';
+import type { ParsedPaper, ParserKind, VaultPort } from './types';
 import type { Layout } from './settings';
 import { scopedVault } from './scoped-vault';
 import { aborted, hash } from './util';
 
 interface ParseMetadata { sourceHash: string; key: string; parser: string; pages: ParsedPaper['pages']; markdownHash: string }
 
-/** Parsed text is stored beside the source PDF, keyed by parser, and reused while it still matches. */
+/** Parsed Markdown and images are stored in the assets folder, keyed by PDF hash and parser, and reused while they still match. */
 export class ParseCache {
   private vault: VaultPort;
   constructor(vault: VaultPort, private layout: Layout) { this.vault = scopedVault(vault, layout.root); }
 
-  /** Returns the vault path of the parsed Markdown, parsing only when no valid cached copy exists. */
-  async load(source: string, sourceHash: string, kind: string, parse: (bytes: Uint8Array) => Promise<ParsedPaper>, signal: AbortSignal, log: (text: string) => void): Promise<string> {
-    const key = `${kind}-v1`, base = this.layout.parsed(sourceHash, key);
-    const markdownPath = base + '/full.md', metadataPath = base + '/parsed.json';
-    const bytes = await this.vault.readBinary(source);
-    if (hash(bytes) !== sourceHash) throw new Error('原始 PDF 已被修改，不能按旧任务继续');
-    if (await this.isValid(markdownPath, metadataPath, sourceHash, key)) { log('复用已保存的解析正文'); return markdownPath; }
+  /**
+   * Makes sure `layout.parsedMarkdown(sourceHash, kind)` holds a valid parse.
+   * The PDF is read only when no valid parse exists, so a parse can be reused after the PDF is gone.
+   */
+  async ensure(sourceHash: string, kind: ParserKind, readSource: () => Promise<Uint8Array>,
+    parse: (bytes: Uint8Array) => Promise<ParsedPaper>, signal: AbortSignal, log: (text: string) => void): Promise<void> {
+    const base = this.layout.parsedDir(sourceHash, kind), key = posix.basename(base);
+    const markdownPath = this.layout.parsedMarkdown(sourceHash, kind), metadataPath = base + '/parsed.json';
+    if (await this.isValid(markdownPath, metadataPath, sourceHash, key)) { log('复用已保存的解析正文'); return; }
+    const bytes = await readSource();
+    if (hash(bytes) !== sourceHash) throw new Error('原始 PDF 与任务记录不一致，不能按旧任务继续');
     const parsed = await parse(bytes);
     aborted(signal);
     for (const asset of parsed.assets) { aborted(signal); await this.save(`${base}/${asset.path}`, asset.bytes); }
     await this.save(markdownPath, parsed.markdown);
     const metadata: ParseMetadata = { sourceHash, key, parser: parsed.parser, pages: parsed.pages, markdownHash: hash(parsed.markdown) };
     await this.save(metadataPath, JSON.stringify(metadata, null, 2));
-    return markdownPath;
+    const pages = parsed.pages.length ? `，${parsed.pages.length} 页` : '', images = parsed.assets.length ? `，${parsed.assets.length} 张图片` : '';
+    log(`解析完成：${parsed.markdown.length} 个字符${pages}${images}`);
   }
 
   private async isValid(markdownPath: string, metadataPath: string, sourceHash: string, key: string): Promise<boolean> {

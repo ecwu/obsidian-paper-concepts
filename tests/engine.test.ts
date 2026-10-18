@@ -20,7 +20,8 @@ describe('serial resumable pipeline', () => {
   it('saves source, parses, generates and writes notes', async () => {
     const f = fixture(); await f.engine.start(); const job = await f.engine.importPdf(samplePdf(), 'study.pdf');
     await until(() => job.phase === 'succeeded' || job.phase === 'failed');
-    expect(job.error).toBeUndefined(); expect(job.phase).toBe('succeeded'); expect(await f.vault.exists(job.source)).toBe(true);
+    expect(job.error).toBeUndefined(); expect(job.phase).toBe('succeeded');
+    expect([...f.vault.files.keys()].some(path => path.endsWith('.pdf'))).toBe(false); expect(await f.store.loadSource(job.hash)).toBeNull();
     expect(await f.vault.read(job.paperPath!)).toContain('Attention'); await f.engine.stop();
   });
   it('deduplicates simultaneous imports by file content', async () => {
@@ -32,6 +33,43 @@ describe('serial resumable pipeline', () => {
     const f = fixture(); f.engine.setPaused(true); await f.engine.start();
     const batch = await f.engine.importBatch([{ name: 'bad.pdf', read: async () => new Uint8Array([1, 2]) }, { name: 'study.pdf', read: async () => samplePdf() }]);
     expect(batch.errors).toHaveLength(1); expect(batch.errors[0]).toContain('bad.pdf'); expect(batch.jobs).toHaveLength(1); await f.engine.stop();
+  });
+  it('uses MinerU after switching parsers even when a local job and cache already exist', async () => {
+    const f = fixture(); const selected: string[] = [];
+    const engine = new TaskEngine({ ...f.deps, parser: async kind => { selected.push(kind); return { parse: async () => ({ markdown: 'Parsed with ' + kind, assets: [], pages: [], parser: kind }) }; } });
+    await engine.start(); const first = await engine.importPdf(samplePdf(), 'study.pdf'); await until(() => first.phase === 'succeeded');
+    f.settings.parser = 'mineru';
+    const second = await engine.importPdf(samplePdf(), 'study.pdf'); await until(() => ['succeeded', 'failed'].includes(second.phase));
+    expect(second.error).toBeUndefined(); expect(second.id).not.toBe(first.id); expect(selected).toEqual(['local', 'mineru']);
+    expect(second.parsed).toContain('/mineru-v1/'); expect(first.parsed).toContain('/local-v1/');
+    expect((await engine.importPdf(samplePdf(), 'study.pdf')).id).toBe(second.id); await engine.stop();
+  });
+  it('retries keep their original parser and switch to MinerU while the PDF is still stored', async () => {
+    const f = fixture(); const selected: string[] = [];
+    const engine = new TaskEngine({ ...f.deps, parser: async kind => { selected.push(kind); return { parse: async () => { if (kind === 'local') throw new Error('scan'); return { markdown: 'Parsed', assets: [], pages: [], parser: kind }; } }; } });
+    await engine.start(); const original = await engine.importPdf(samplePdf(), 'study.pdf'); await until(() => original.phase === 'failed');
+    f.settings.parser = 'mineru'; await engine.retry(original.id); await until(() => original.phase === 'failed');
+    expect(original.settings.parser).toBe('local'); expect(await f.store.loadSource(original.hash)).not.toBeNull();
+    const switched = await engine.reanalyze(original.id, 'mineru'); await until(() => ['succeeded', 'failed'].includes(switched.phase));
+    expect(switched.error).toBeUndefined(); expect(selected).toEqual(['local', 'local', 'mineru']); await engine.stop();
+  });
+  it('asks for the PDF again when a new parser needs it after the PDF was released', async () => {
+    const f = fixture(); await f.engine.start(); const first = await f.engine.importPdf(samplePdf(), 'study.pdf'); await until(() => first.phase === 'succeeded');
+    const switched = await f.engine.reanalyze(first.id, 'mineru'); await until(() => switched.phase === 'failed');
+    expect(switched.error).toContain('重新导入'); expect(f.runs).toBe(1); await f.engine.stop();
+  });
+  it('keeps the PDF while another job of the same PDF still needs it', async () => {
+    const f = fixture(); f.engine.setPaused(true); await f.engine.start();
+    const local = await f.engine.importPdf(samplePdf(), 'study.pdf'); f.settings.parser = 'mineru';
+    const mineru = await f.engine.importPdf(samplePdf(), 'study.pdf'); f.engine.setPaused(false);
+    await until(() => [local, mineru].every(j => ['succeeded', 'failed'].includes(j.phase)));
+    expect([local.error, mineru.error]).toEqual([undefined, undefined]); expect(f.parses).toBe(2); expect(await f.store.loadSource(local.hash)).toBeNull(); await f.engine.stop();
+  });
+  it('does not silently run the local parser after a MinerU error', async () => {
+    const f = fixture(); f.settings.parser = 'mineru'; const requested: string[] = [];
+    const engine = new TaskEngine({ ...f.deps, parser: async kind => { requested.push(kind); return { parse: async () => { throw new Error('MinerU Token expired'); } }; } });
+    await engine.start(); const j = await engine.importPdf(samplePdf(), 'study.pdf'); await until(() => j.phase === 'failed');
+    expect(requested).toEqual(['mineru']); expect(j.error).toContain('Token expired'); expect(f.runs).toBe(0); await engine.stop();
   });
   it('uses the queued task secret selection rather than changed global settings', async () => {
     const f = fixture(); f.settings.parser = 'mineru'; const selected: string[] = [];
@@ -57,9 +95,9 @@ describe('serial resumable pipeline', () => {
     await f.engine.start(); const j = await f.engine.importPdf(samplePdf(), 'study.pdf'); await until(() => j.phase === 'failed');
     expect(f.runs).toBe(2); expect(await f.vault.read('Research/200-Concepts/Human.md')).toContain('Human 1'); expect(j.paperPath).toBeUndefined(); await f.engine.stop();
   });
-  it('keeps original PDFs when a harness fails', async () => {
+  it('keeps the parsed text when a harness fails', async () => {
     const f = fixture(async () => { throw new Error('not authenticated'); }); await f.engine.start(); const j = await f.engine.importPdf(samplePdf(), 'study.pdf'); await until(() => j.phase === 'failed');
-    expect(await f.vault.exists(j.source)).toBe(true); expect(j.error).toContain('not authenticated'); await f.engine.stop();
+    expect(await f.vault.exists(j.parsed)).toBe(true); expect(j.error).toContain('not authenticated'); await f.engine.stop();
   });
   it('removes the harness workspace when analysis fails', async () => {
     let cwd = ''; const f = fixture();

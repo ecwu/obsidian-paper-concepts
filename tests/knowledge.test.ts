@@ -27,7 +27,7 @@ describe('knowledge boundaries', () => {
 
 describe('automatic write and recovery', () => {
   async function fixture() {
-    const vault = new MemoryVault(), store = new MemoryStore(), j = job(); vault.files.set(j.source, new Uint8Array([1, 2]));
+    const vault = new MemoryVault(), store = new MemoryStore(), j = job(); vault.files.set(j.parsed, '# Parsed');
     const repository = new KnowledgeRepository(vault, layoutOf(j.settings)), writer = new KnowledgeWriter(vault, store);
     return { vault, store, j, repository, writer };
   }
@@ -35,8 +35,8 @@ describe('automatic write and recovery', () => {
     const f = await fixture(), journal = await f.writer.prepare(f.j, result(), await f.repository.snapshot());
     await f.writer.apply(journal); await f.writer.apply(journal);
     const paper = await f.vault.read(journal.paperPath);
-    expect(paper).toContain('[[Research/200-Concepts/Attention|Attention]]'); expect(paper).toContain(f.j.source);
-    expect((await f.vault.list()).length).toBe(2); expect(journal.complete).toBe(true);
+    expect(paper).toContain('[[Research/200-Concepts/Attention|Attention]]'); expect(paper).toContain(f.j.parsed.replace(/\.md$/, ''));
+    expect((await f.vault.list()).length).toBe(3); expect(journal.complete).toBe(true);
   });
   it('reuses a concept by alias and preserves its file name and personal property', async () => {
     const f = await fixture(); const path = 'Research/200-Concepts/My chosen filename.md';
@@ -59,9 +59,9 @@ describe('automatic write and recovery', () => {
   });
   it('updates the same paper on reanalysis and accumulates sources', async () => {
     const f = await fixture(); await f.writer.apply(await f.writer.prepare(f.j, result(), await f.repository.snapshot()));
-    const j2 = { ...job(), hash: f.j.hash, source: f.j.source };
+    const j2 = { ...job(), hash: f.j.hash, parsed: f.j.parsed };
     const second = await f.writer.prepare(j2, result(), await f.repository.snapshot()); await f.writer.apply(second);
-    expect(second.paperPath).toBe('Research/100-Papers/Study.md'); expect((await f.vault.list()).length).toBe(2);
+    expect(second.paperPath).toBe('Research/100-Papers/Study.md'); expect((await f.vault.list()).length).toBe(3);
   });
   it('preserves manual body additions to both Paper and Concept during reanalysis', async () => {
     const f = await fixture(); const first = await f.writer.prepare(f.j, result(), await f.repository.snapshot()); await f.writer.apply(first);
@@ -72,10 +72,10 @@ describe('automatic write and recovery', () => {
   });
   it('rejects broken links before writing any notes', async () => {
     const f = await fixture(); const r = result(); r.paper.body += '\n[[Missing Concept]]';
-    await expect(f.writer.prepare(f.j, r, await f.repository.snapshot())).rejects.toThrow('链接目标'); expect((await f.vault.list()).length).toBe(0);
+    await expect(f.writer.prepare(f.j, r, await f.repository.snapshot())).rejects.toThrow('链接目标'); expect((await f.vault.list()).length).toBe(1);
   });
   it('rewrites encoded Markdown links to saved parsed images', async () => {
-    const f = await fixture(); f.j.parsed = 'Research/Assets/paper/parsed/local-v1/full.md';
+    const f = await fixture(); f.j.parsed = 'Research/Assets/paper/parsed/local-v1/full.md'; f.vault.files.set(f.j.parsed, '# Parsed');
     f.vault.files.set('Research/Assets/paper/parsed/local-v1/images/Figure 1.png', new Uint8Array([1]));
     const r = result(); r.paper.body += '\n![Figure](images/Figure%201.png)';
     const journal = await f.writer.prepare(f.j, r, await f.repository.snapshot());
