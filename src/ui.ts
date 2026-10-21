@@ -1,4 +1,4 @@
-import { App, ItemView, PluginSettingTab, Setting, WorkspaceLeaf, SecretComponent, Notice, type ButtonComponent, type TextAreaComponent } from 'obsidian';
+import { App, ItemView, Menu, setIcon, PluginSettingTab, Setting, WorkspaceLeaf, SecretComponent, Notice, type ButtonComponent, type TextAreaComponent } from 'obsidian';
 import type PaperConceptsPlugin from './main';
 import { PARSERS, PROVIDERS, type Job, type ParserKind, type Phase, type Prompts, type Provider, type Settings } from './types';
 import { DEFAULT_PROMPTS } from './prompts';
@@ -16,12 +16,15 @@ const LABELS: Record<Phase, string> = {
 const PARSER_LABELS: Record<ParserKind, string> = { local: '本地文本提取', mineru: 'MinerU 云端解析' };
 const FOLDER_FIELDS = [['inbox', '收件目录'], ['papers', '论文目录'], ['concepts', '概念目录'], ['assets', '附件目录']] as const;
 const PROMPT_FIELDS = [['workflow', '工作流程'], ['paper', 'Paper 格式'], ['concept', 'Concept 格式'], ['writing', '写作规范']] as const;
+const HISTORY_PAGE = 10;
 export class PaperView extends ItemView {
   private update = () => this.renderTasks();
   private tasks?: HTMLElement;
   private status?: HTMLElement;
-  private pauseButton?: HTMLButtonElement;
+  private pauseButton?: HTMLElement;
   private selected?: string;
+  private historyOpen = true;
+  private historyLimit = HISTORY_PAGE;
   constructor(leaf: WorkspaceLeaf, private plugin: PaperConceptsPlugin) { super(leaf); }
   getViewType(): string { return VIEW_TYPE; }
   getDisplayText(): string { return 'Paper Concepts'; }
@@ -31,67 +34,123 @@ export class PaperView extends ItemView {
   }
   async onClose(): Promise<void> { this.plugin.listeners.delete(this.update); }
   private run(action: () => Promise<unknown>): void { void action().catch(e => this.plugin.report(e)); }
+  private iconButton(parent: HTMLElement, icon: string, label: string, onClick: (e: MouseEvent) => void): HTMLElement {
+    const b = parent.createDiv({ cls: 'clickable-icon', attr: { role: 'button', tabindex: '0', 'aria-label': label } });
+    setIcon(b, icon);
+    b.addEventListener('click', e => { e.stopPropagation(); onClick(e); });
+    b.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); b.click(); } });
+    return b;
+  }
   private render(): void {
     const el = this.contentEl; el.empty(); el.addClass('pc-view');
     const header = el.createDiv({ cls: 'pc-header' });
-    header.createEl('h1', { text: '论文知识库' });
-    header.createEl('p', { text: '保存论文，让概念随阅读积累。', cls: 'pc-muted' });
-    const actions = header.createDiv({ cls: 'pc-actions' });
-    const importButton = actions.createEl('button', { text: '导入 PDF', cls: 'mod-cta' });
-    importButton.addEventListener('click', () => this.plugin.chooseFiles());
-    const configure = actions.createEl('button', { text: '配置知识库' });
-    configure.addEventListener('click', () => {
+    header.createDiv({ text: '论文知识库', cls: 'pc-title' });
+    const actions = header.createDiv({ cls: 'pc-header-actions' });
+    this.iconButton(actions, 'file-plus', '导入 PDF', () => this.plugin.chooseFiles());
+    this.pauseButton = this.iconButton(actions, 'pause', '暂停队列', () => this.plugin.engine.setPaused(!this.plugin.engine.paused));
+    this.iconButton(actions, 'settings', '配置知识库', () => {
       const setting = (this.app as App & { setting: { open(): void; openTabById(id: string): void } }).setting;
       setting.open(); setting.openTabById(this.plugin.manifest.id);
     });
     const drop = el.createDiv({ cls: 'pc-drop', attr: { role: 'button', tabindex: '0', 'aria-label': '拖入或选择 PDF 文件' } });
-    drop.createEl('strong', { text: '将 PDF 拖到这里' });
-    drop.createEl('span', { text: '支持批量导入。原始文件会保留在指定知识目录中。', cls: 'pc-muted' });
+    setIcon(drop.createSpan({ cls: 'pc-drop-icon' }), 'upload');
+    drop.createSpan({ text: '拖入 PDF 或点击选择' });
     drop.addEventListener('click', () => this.plugin.chooseFiles());
     drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.plugin.chooseFiles(); } });
-    drop.addEventListener('dragover', e => { e.preventDefault(); drop.addClass('is-dragging'); });
-    drop.addEventListener('dragleave', () => drop.removeClass('is-dragging'));
-    drop.addEventListener('drop', e => { e.preventDefault(); drop.removeClass('is-dragging'); if (e.dataTransfer?.files) void this.plugin.importFiles([...e.dataTransfer.files]); });
+    // The whole view accepts drops; the strip only highlights.
+    el.addEventListener('dragover', e => { e.preventDefault(); drop.addClass('is-dragging'); });
+    el.addEventListener('dragleave', e => { if (!el.contains(e.relatedTarget as Node | null)) drop.removeClass('is-dragging'); });
+    el.addEventListener('drop', e => { e.preventDefault(); drop.removeClass('is-dragging'); if (e.dataTransfer?.files) void this.plugin.importFiles([...e.dataTransfer.files]); });
     this.status = el.createDiv({ cls: 'pc-status', attr: { role: 'status', 'aria-live': 'polite' } });
-    const toolbar = el.createDiv({ cls: 'pc-toolbar' }); toolbar.createEl('h2', { text: '处理记录' });
-    this.pauseButton = toolbar.createEl('button');
-    this.pauseButton.addEventListener('click', () => this.plugin.engine.setPaused(!this.plugin.engine.paused));
     this.tasks = el.createDiv({ cls: 'pc-tasks' }); this.renderTasks();
   }
   private renderTasks(): void {
     if (!this.tasks || !this.status) return;
     const engine = this.plugin.engine;
     const settings = this.plugin.settings;
-    this.status.setText(settings.root ? `${settings.root} · ${settings.provider} · ${PARSER_LABELS[settings.parser]}` : '先在配置中选择一个仓库内目录，再导入 PDF。');
-    this.pauseButton!.textContent = engine.paused ? '继续队列' : '暂停队列';
+    const context = settings.root ? `${settings.root} · ${settings.provider} · ${PARSER_LABELS[settings.parser]}` : '先在配置中选择一个仓库内目录，再导入 PDF。';
+    this.status.setText((engine.paused ? '队列已暂停 · ' : '') + context);
+    this.status.setAttr('title', context);
+    if (this.pauseButton) {
+      setIcon(this.pauseButton, engine.paused ? 'play' : 'pause');
+      this.pauseButton.setAttr('aria-label', engine.paused ? '继续队列' : '暂停队列');
+      this.pauseButton.toggleClass('is-active', engine.paused);
+    }
     this.tasks.empty();
     const jobs = engine.jobs.filter(j => j.root === settings.root);
     if (!jobs.length) { this.tasks.createEl('p', { text: '还没有论文。导入后可在这里查看分析进度与结果。', cls: 'pc-empty' }); return; }
-    for (const job of jobs) this.renderJob(job);
-  }
-  private renderJob(job: Job): void {
-    const row = this.tasks!.createEl('article', { cls: 'pc-job' });
-    const heading = row.createDiv({ cls: 'pc-job-heading' }); heading.createEl('h3', { text: job.filename });
-    heading.createEl('span', { text: LABELS[job.phase], cls: 'pc-state pc-state-' + job.phase });
-    row.createEl('p', { text: `${job.settings.provider} · ${PARSER_LABELS[job.settings.parser]} · ${new Date(job.created).toLocaleString()}`, cls: 'pc-muted pc-meta' });
-    const active = this.plugin.engine.activeJob?.id === job.id;
-    if (active) row.createEl('p', { text: job.logs.at(-1)?.text ?? LABELS[job.phase], cls: 'pc-phase' });
-    if (job.error) row.createEl('p', { text: job.error, cls: 'pc-error', attr: { role: 'alert' } });
-    const controls = row.createDiv({ cls: 'pc-actions' });
-    const button = (text: string, action: () => Promise<unknown>) => { const b = controls.createEl('button', { text }); b.addEventListener('click', () => this.run(action)); };
-    if (job.paperPath) button('打开论文', () => this.app.workspace.openLinkText(job.paperPath!, '', false));
-    if (active || isPending(job)) button('取消', () => this.plugin.engine.cancel(job.id));
-    if (!active && canRetry(job)) button('重试原任务', () => this.plugin.engine.retry(job.id));
-    if (!active && isFinished(job)) {
-      button('按当前设置重新分析', () => this.plugin.engine.reanalyze(job.id));
+    const current = jobs.filter(j => j.phase !== 'succeeded'), done = jobs.filter(j => j.phase === 'succeeded');
+    if (current.length) {
+      this.tasks.createDiv({ text: `进行中 · ${current.length}`, cls: 'pc-section-title' });
+      for (const job of current) this.renderJob(this.tasks, job);
     }
+    if (done.length) this.renderHistory(done);
+  }
+  private renderJob(parent: HTMLElement, job: Job): void {
+    const row = parent.createEl('article', { cls: 'pc-job' });
+    const heading = row.createDiv({ cls: 'pc-job-heading' });
+    heading.createDiv({ text: displayName(job.filename), cls: 'pc-job-title', attr: { title: job.filename } });
+    heading.createSpan({ text: LABELS[job.phase], cls: 'pc-state pc-state-' + job.phase });
+    const active = this.plugin.engine.activeJob?.id === job.id;
+    if (active) row.createDiv({ text: job.logs.at(-1)?.text ?? LABELS[job.phase], cls: 'pc-phase' });
+    if (job.error) row.createDiv({ text: job.error, cls: 'pc-error', attr: { role: 'alert' } });
+    const controls = row.createDiv({ cls: 'pc-job-actions' });
+    const button = (text: string, action: () => Promise<unknown>) => { const b = controls.createEl('button', { text }); b.addEventListener('click', () => this.run(action)); };
+    if (active || isPending(job)) button('取消', () => this.plugin.engine.cancel(job.id));
+    if (!active && canRetry(job)) button('重试', () => this.plugin.engine.retry(job.id));
     // A failed local parse keeps the PDF in the runtime store, so MinerU can parse it again.
     if (!active && canRetry(job) && job.settings.parser === 'local') button('改用 MinerU', () => this.plugin.engine.reanalyze(job.id, 'mineru'));
-    const logs = row.createEl('details'); logs.open = this.selected === job.id;
-    logs.createEl('summary', { text: '查看日志' });
-    logs.addEventListener('toggle', () => { if (logs.open) this.selected = job.id; else if (this.selected === job.id) this.selected = undefined; });
-    logs.createEl('pre', { text: job.logs.map(l => `${new Date(l.at).toLocaleTimeString()}  ${l.text}`).join('\n'), cls: 'pc-log' });
+    this.iconButton(controls, 'more-horizontal', '更多操作', e => this.openMenu(job, e));
+    if (this.selected === job.id) this.renderLog(row, job);
   }
+  private renderHistory(done: Job[]): void {
+    const section = this.tasks!.createDiv({ cls: 'pc-history' });
+    const title = section.createDiv({ cls: 'pc-section-title pc-collapsible', attr: { role: 'button', tabindex: '0', 'aria-expanded': String(this.historyOpen) } });
+    setIcon(title.createSpan({ cls: 'pc-chevron' }), this.historyOpen ? 'chevron-down' : 'chevron-right');
+    title.createSpan({ text: `已完成 · ${done.length}` });
+    const toggle = () => { this.historyOpen = !this.historyOpen; this.renderTasks(); };
+    title.addEventListener('click', toggle);
+    title.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    if (!this.historyOpen) return;
+    const list = section.createDiv({ cls: 'pc-history-list' });
+    for (const job of done.slice(0, this.historyLimit)) {
+      const item = list.createDiv({ cls: 'pc-history-item' });
+      const line = item.createDiv({ cls: 'pc-history-line', attr: { role: 'button', tabindex: '0', title: `${job.filename}\n${job.settings.provider} · ${PARSER_LABELS[job.settings.parser]} · ${new Date(job.created).toLocaleString()}` } });
+      line.createSpan({ text: displayName(job.filename), cls: 'pc-history-name' });
+      line.createSpan({ text: shortDate(job.created), cls: 'pc-history-date' });
+      this.iconButton(line, 'more-horizontal', '更多操作', e => this.openMenu(job, e));
+      const open = () => { if (job.paperPath) this.run(() => this.app.workspace.openLinkText(job.paperPath!, '', false)); };
+      line.addEventListener('click', open);
+      line.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); open(); } });
+      line.addEventListener('contextmenu', e => { e.preventDefault(); this.openMenu(job, e); });
+      if (this.selected === job.id) this.renderLog(item, job);
+    }
+    if (done.length > this.historyLimit) {
+      const more = section.createEl('button', { text: `显示更多（还有 ${done.length - this.historyLimit} 篇）`, cls: 'pc-more' });
+      more.addEventListener('click', () => { this.historyLimit += HISTORY_PAGE * 2; this.renderTasks(); });
+    }
+  }
+  private openMenu(job: Job, e: MouseEvent): void {
+    const active = this.plugin.engine.activeJob?.id === job.id;
+    const menu = new Menu();
+    if (job.paperPath) menu.addItem(i => i.setTitle('打开论文').setIcon('file-text').onClick(() => this.run(() => this.app.workspace.openLinkText(job.paperPath!, '', false))));
+    if (!active && isFinished(job)) menu.addItem(i => i.setTitle('按当前设置重新分析').setIcon('refresh-cw').onClick(() => this.run(() => this.plugin.engine.reanalyze(job.id))));
+    menu.addItem(i => i.setTitle(this.selected === job.id ? '收起日志' : '查看日志').setIcon('scroll-text').onClick(() => {
+      this.selected = this.selected === job.id ? undefined : job.id; this.renderTasks();
+    }));
+    menu.showAtMouseEvent(e);
+  }
+  private renderLog(parent: HTMLElement, job: Job): void {
+    parent.createEl('pre', { text: job.logs.map(l => `${new Date(l.at).toLocaleTimeString()}  ${l.text}`).join('\n'), cls: 'pc-log' });
+  }
+}
+
+const displayName = (filename: string): string => filename.replace(/\.pdf$/i, '');
+/** Time for today, otherwise month and day; the year only when it differs. */
+function shortDate(iso: string): string {
+  const d = new Date(iso), now = new Date();
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString([], d.getFullYear() === now.getFullYear() ? { month: 'numeric', day: 'numeric' } : { year: 'numeric', month: 'numeric', day: 'numeric' });
 }
 
 export class PaperSettingsTab extends PluginSettingTab {

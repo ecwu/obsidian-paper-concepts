@@ -135,9 +135,9 @@ The palette is semantic, and the host theme controls it. Use the Obsidian variab
 
 ## Layout
 
-The plugin view is a column at the center. Its maximum width is `1040px`, and its desktop padding is `32px`. The header contains the title, one supporting sentence, and a row of actions that can wrap. The drop area is below the header. It has the full width, a `28px` top margin, and a `16px` bottom margin. Below the drop area are a muted context line and a toolbar. The toolbar has the queue heading at one edge and the pause button at the other edge.
+The view is designed for the sidebar. It has `12px` padding and no maximum width. The header is one line: the `论文知识库` title at one edge, and three native `clickable-icon` buttons at the other edge (import, pause/resume the queue, settings). Below it is a one-line drop strip and a faint context line that is cut with an ellipsis. The whole view accepts dropped PDFs; the strip shows the drag-over state.
 
-Job records are vertical, transparent rows. Each row has `20px` vertical padding and a one-pixel divider at the bottom. Action groups wrap with an `8px` gap. If the width is less than `600px`, the view padding is `20px 16px`. In this condition, each job heading puts the file name above the state, with a `4px` gap. The Obsidian tabs, sidebar, and navigation around the view are the native frame of the host application.
+Jobs are in two sections with small muted section labels. `进行中` lists every job that has not succeeded (active, queued, failed, cancelled, interrupted) as full rows. `已完成` is a compact list that opens and closes. It shows 10 papers first, and a `显示更多` button adds more.
 
 ## Elevation & Depth
 
@@ -167,8 +167,8 @@ The drop area is the only custom surface with rounded corners. It uses the Obsid
 
 ### Task records
 
-- **Structure:** A transparent `article` row. The first line has the file name and the state. Below it is a muted line with the harness, the parser, and the time.
-- **Actions:** Native buttons below the metadata. The buttons wrap when necessary. The active job shows one more line with the current phase. A failed job shows one alert line.
+- **Unfinished jobs:** A transparent `article` row with a bottom divider. The first line has the file name (at most two lines) and the state. The active job shows one line with the current phase. A failed job shows one alert line. Small native buttons (`取消`, `重试`, `改用 MinerU`) and a `⋯` menu button are below.
+- **Completed jobs:** One line each: the file name without `.pdf`, cut with an ellipsis, and a short date. A click opens the paper. The tooltip shows the full name, harness, parser, and time. The `⋯` button (shown on hover) and the context menu hold `打开论文`, `按当前设置重新分析`, and `查看日志`.
 - **States:** Completed text uses the theme success color. Failed text and error messages use the theme error color. Other phases use muted text.
 
 ### Inputs / fields
@@ -179,7 +179,7 @@ The drop area is the only custom surface with rounded corners. It uses the Obsid
 ### Logs and status
 
 - **Status:** The queue context and the states that are not final use small muted UI text. The success and error states use semantic theme colors.
-- **Log block:** `查看日志` (show log) is a native `details` element that opens and closes. Its `pre` content uses the secondary surface, a `12px` inset, small monospace text, and line wrap. Its maximum height is `260px`. If the content is longer, the block scrolls.
+- **Log block:** `查看日志` (show log) in the `⋯` menu opens the log under its row. Its `pre` content uses the secondary surface, an `8px` inset, small monospace text, and line wrap. Its maximum height is `220px`. If the content is longer, the block scrolls.
 
 ## Do's and Don'ts
 
